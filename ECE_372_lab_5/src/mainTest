@@ -1,0 +1,190 @@
+// Header and source files
+#include <Arduino.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include "switch.h"
+#include "timer.h"
+#include "pwm.h"
+#include "SPI.h"
+#include "i2c.h"
+
+#define ADXL345_ADDRESS 0x1D  // ADXL345 I2C address with PIN SD0 high
+
+// ADXL register addresses and configuration
+#define PWR_CONTROL 0X2D  // Data rate and power control mode register
+#define MEASURE_MODE  0x08    // Sets ADXL into measurement mode
+#define DATA_FORMAT_REG 0x31  // Data format register for read/write
+#define DATA_FORMAT 0X08    // Data format for +/- 2g, full resolution, right justified 
+
+// ADXL register addresses for acclerometer data
+#define SL_MEMA_XAX_LOW   0x32
+#define SL_MEMA_XAX_HIGH  0x33
+#define SL_MEMA_YAX_LOW   0x34
+#define SL_MEMA_YAX_HIGH  0x35
+#define SL_MEMA_ZAX_LOW   0x36
+#define SL_MEMA_ZAX_HIGH  0x37
+
+typedef enum stateEnumaration{wait_press, debounce_press, wait_release, debounce_release}state;  // initial enum for states
+volatile state button_state = wait_press; 
+volatile int alarm_state = 1;  // not alarming state
+
+int main(void){
+Serial.begin(9600);   // Serial (for debugging)
+  
+  // VARIABLES
+  //???
+
+  // HARDWARE INITIALIZATIONS
+  initSwitchPB3();      // Initialize the switch
+  SPI_MASTER_Init();    //Initialize the SPI module
+  initPWMTimer4();      // Initialize timer 4 for PWM mode 15
+  initTimer1();         // Initialize timer 1 (for millisecond delay)
+  initI2C();            // Initialize I2C bus
+  sei();                // Enable global interrupts
+  
+ 
+
+
+  Serial.begin(9600);  // use serial port for print in debug
+  sei();
+   SPI_MASTER_Init(); // initialize SPI module and set the data rate
+  write_execute(0x0A, 0x08);  // brightness control
+  write_execute(0x0B, 0x07); // scanning all rows and columns
+  write_execute(0x0C,0x01); // set shutdown register to normal operation (0x01)
+  write_execute(0x0F, 0x00); // display test register - set to normal operation (0x01)*/
+  // setup ADXL345 for proper measurement mode and data format
+  StartI2C_Trans(ADXL345_ADDRESS);  // call ADXL345 address plus write bit
+
+  
+  write(PWR_CONTROL);// SLA Register address for configuring measurement mode
+
+  write (MEASURE_MODE); // Write to ADXL to setup for measurement mode
+
+  write(DATA_FORMAT_REG);// SLA internal memory address for dataformat
+
+  write(DATA_FORMAT); // +/- 2g, full resolution, right justified
+
+  float tilt_x = 0.0;
+  float tilt_y = 0.0;
+
+  
+  while(1){
+      delayMs(1000);//delay
+
+
+    int *accel = Read_Acc(ADXL345_ADDRESS, SL_MEMA_XAX_LOW); // read x,y,z multibyte data
+
+    Serial.println();
+    Serial.print("X: ");
+    Serial.println(*(accel +0)); // print out xaxis data using pointer to static array
+
+    Serial.print("Y: ");
+    Serial.println(*(accel +1)); // print out y axis data using point to static array
+
+    Serial.print("Z: ");
+    Serial.println(*(accel +2));  // print out z axis data using pointer to static array
+
+    StopI2C_Trans();
+    
+ 
+
+//for happy or sad face
+    if((tilt_x > 8000) | (tilt_x < -8000) | (tilt_y > 8000) | (tilt_y < -8000)){      // tilt more than 45 degree
+      if(alarm_state == 2){  // button pressed 
+     // Serial.println("Button Pressed");
+      OCR4A = 0;
+      }
+      else{
+      alarm(500);
+      delayMs(100);
+      alarm(1000);
+      delayMs(100);
+      alarm(1500);
+      delayMs(100);
+      alarm(2000);
+      delayMs(100);
+      alarm(2500);
+      delayMs(100);
+      OCR4A = 0;
+      write_execute(0x01, 0b00000000); // all LEDS in Row 1 are off
+      write_execute(0x02, 0b11111111); // row 2 LEDS 
+      write_execute(0x03, 0b00000000); // row 3 LEDS
+      write_execute(0x04, 0b11111111); // row 4 LEDS
+      write_execute(0x05, 0b00000000); // row 5 LEDS
+      write_execute(0x06, 0b00000000); // row 6 LEDS
+      write_execute(0x07, 0b00000000); // row 7 LEDS
+      write_execute(0x08, 0b00000000); // row 8 LEDS
+
+
+      Serial.println("        ");
+      Serial.println("Alarm State ");
+
+
+      }
+    }
+
+/// write "ALL" to LED array.  Must address all 8 rows.  
+//Each row has data for individual LED:   "1" LED is on, "0" LED is off
+else{
+
+  OCR4A = 0;
+    Serial.println("Normal Mode");
+   ///*
+    Serial.println("        ");
+    Serial.println("Normal Mode");
+    //*/
+
+      write_execute(0x01, 0b00000000); // all LEDS in Row 1 are off
+      write_execute(0x02, 0b11111111); // row 2 LEDS 
+      write_execute(0x03, 0b00000000); // row 3 LEDS
+      write_execute(0x04, 0b11111111); // row 4 LEDS
+      write_execute(0x05, 0b00000000); // row 5 LEDS
+      write_execute(0x06, 0b00000000); // row 6 LEDS
+      write_execute(0x07, 0b00000000); // row 7 LEDS
+      write_execute(0x08, 0b00000000); // row 8 LEDS
+
+
+}
+
+Serial.flush();
+
+  // ===============state machine =====================// 
+       switch (button_state){
+              case wait_press:
+              break;
+              case debounce_press:
+              delayMs(1); // delay for 1 milisecond
+              button_state = wait_release;
+              break;
+              case wait_release:
+              //button_state = debounce_press;
+              break;
+              case debounce_release:
+              delayMs(1);
+              button_state = wait_press;
+              break;
+                          
+        }
+  // =======================state machine end ===========// 
+}
+
+return 0;
+}
+
+ISR(PCINT0_vect){ //pin change interrrupt service register
+        if (button_state == wait_press){
+          button_state = debounce_press;  // change to debounce_press state
+        }else if(button_state == wait_release){
+          if(alarm_state == 1){  // check for the tutton state
+            alarm_state = 2;
+    
+          }
+          else if(alarm_state == 2){
+            alarm_state = 1;
+          }
+          button_state = debounce_release;  // change to debounce_release state
+        }
+}
+  
+  
+  
